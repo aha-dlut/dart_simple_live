@@ -26,40 +26,54 @@ jobs:
       - name: "Clean lockfile"
         run: rm -f pubspec.lock
 
-      # 尝试 1：覆盖 intl + 升级 media_kit_video（尽量保持较新依赖）
-      - name: "Write overrides (try1: intl + media_kit_video)"
+      - name: "Write pubspec_overrides.yaml (fix intl only)"
         run: |
           cat > pubspec_overrides.yaml <<'EOF'
           dependency_overrides:
             intl: 0.20.2
-            media_kit_video: ^1.4.0
           EOF
-          echo "=== pubspec_overrides.yaml (try1) ==="
+          echo "=== pubspec_overrides.yaml ==="
           cat pubspec_overrides.yaml
 
-      - name: "Pub get (try1)"
-        id: pubget1
+      - name: "Pub get"
         run: flutter pub get
-        continue-on-error: true
 
-      # 如果 try1 失败，则回退：intl + 降级 screen_brightness 以兼容 media_kit_video 1.2.x
-      - name: "Write overrides (fallback: intl + screen_brightness)"
-        if: ${{ steps.pubget1.outcome == 'failure' }}
+      # === 关键：在 Windows 侧移除问题插件的原生注册与构建 ===
+      - name: "Patch generated Windows plugin files (drop problematic plugins)"
         run: |
-          cat > pubspec_overrides.yaml <<'EOF'
-          dependency_overrides:
-            intl: 0.20.2
-            screen_brightness: ^0.2.2+1
-          EOF
-          echo "=== pubspec_overrides.yaml (fallback) ==="
-          cat pubspec_overrides.yaml
+          set -e
+          GEN_DIR="windows/flutter"
 
-      - name: "Pub get (fallback)"
-        if: ${{ steps.pubget1.outcome == 'failure' }}
-        run: flutter pub get
+          echo "Before patch ===== generated_plugins.cmake ====="
+          sed -n '1,200p' "${GEN_DIR}/generated_plugins.cmake" || true
 
-      - name: "Show resolved versions"
-        run: dart pub deps | grep -E "intl|media_kit_video|screen_brightness" || true
+          # 1) 从 CMake 里移除 add_subdirectory / plugin 列表（避免编译原生插件）
+          #    这里粗删包含关键字的整行
+          sed -i '/media_kit_libs_windows_video/d' "${GEN_DIR}/generated_plugins.cmake"
+          sed -i '/screen_brightness_windows/d' "${GEN_DIR}/generated_plugins.cmake"
+
+          echo "After patch ===== generated_plugins.cmake ====="
+          sed -n '1,200p' "${GEN_DIR}/generated_plugins.cmake" || true
+
+          # 2) 从 C++ registrant 里移除 include 和 Register 调用（避免找不到头文件/符号）
+          REG_CC="${GEN_DIR}/generated_plugin_registrant.cc"
+          if [ -f "${REG_CC}" ]; then
+            cp "${REG_CC}" "${REG_CC}.bak"
+
+            # 删除相关 include
+            sed -i '/media_kit_libs_windows_video/d' "${REG_CC}"
+            sed -i '/screen_brightness_windows/d' "${REG_CC}"
+
+            # 有些版本使用 *_plugin_c_api.h / *_plugin.h，以上两行已覆盖常见情况
+
+            echo "After patch ===== generated_plugin_registrant.cc (diff) ====="
+            diff -u "${REG_CC}.bak" "${REG_CC}" || true
+          else
+            echo "No generated_plugin_registrant.cc found (will be generated during build)."
+          fi
+
+      - name: "Show resolved key deps"
+        run: dart pub deps | grep -E "intl|media_kit|screen_brightness" || true
 
       - name: "Build Release"
         run: flutter build windows --release
