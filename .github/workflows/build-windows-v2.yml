@@ -21,46 +21,46 @@ jobs:
         run: flutter config --enable-windows-desktop
 
       - name: Clean lockfile
-        shell: pwsh
         run: |
           if (Test-Path pubspec.lock) { Remove-Item pubspec.lock -Force }
 
-      # 尝试1：覆盖 intl & 升级 media_kit_video（优先保持较新依赖）
-      # 失败则尝试2：覆盖 intl & 降级 screen_brightness 以匹配 media_kit_video 1.2.x
-      - name: Resolve deps with overrides (try upgrade, then fallback)
-        shell: pwsh
+      # 尝试1：intl 0.20.2 + 升级 media_kit_video（优先较新依赖）
+      - name: Write overrides (try1: intl + media_kit_video)
+        shell: bash
         run: |
-          function Try-PubGet($yaml) {
-            $yaml | Out-File -FilePath pubspec_overrides.yaml -Encoding utf8
-            Write-Host "=== pubspec_overrides.yaml ==="
-            Get-Content pubspec_overrides.yaml
-            flutter pub get
-            return $LASTEXITCODE
-          }
-
-          # 尝试1：intl + media_kit_video 升级
-          $try1 = @"
+          cat > pubspec_overrides.yaml <<'EOF'
           dependency_overrides:
             intl: 0.20.2
             media_kit_video: ^1.4.0
-          "@
-          $code = Try-PubGet $try1
+          EOF
+          echo "=== pubspec_overrides.yaml (try1) ==="
+          cat pubspec_overrides.yaml
 
-          if ($code -ne 0) {
-            Write-Host "Try1 failed, fallback to screen_brightness downgrade..."
-            # 尝试2：intl + 降级 screen_brightness（去掉 media_kit_video 的覆盖）
-            $try2 = @"
-            dependency_overrides:
-              intl: 0.20.2
-              screen_brightness: ^0.2.2+1
-            "@
-            $code = Try-PubGet $try2
-            if ($code -ne 0) { exit $code }
-          }
+      - name: Pub get (try1)
+        id: pubget1
+        run: flutter pub get
+        continue-on-error: true
 
-      - name: Show resolved versions (intl/media_kit_video/screen_brightness)
-        shell: pwsh
-        run: dart pub deps | Select-String -Pattern "intl|media_kit_video|screen_brightness"
+      # 若 try1 失败，则回退：intl 0.20.2 + 降级 screen_brightness
+      - name: Write overrides (fallback: intl + screen_brightness)
+        if: steps.pubget1.outcome == 'failure'
+        shell: bash
+        run: |
+          cat > pubspec_overrides.yaml <<'EOF'
+          dependency_overrides:
+            intl: 0.20.2
+            screen_brightness: ^0.2.2+1
+          EOF
+          echo "=== pubspec_overrides.yaml (fallback) ==="
+          cat pubspec_overrides.yaml
+
+      - name: Pub get (fallback)
+        if: steps.pubget1.outcome == 'failure'
+        run: flutter pub get
+
+      - name: Show resolved versions
+        shell: bash
+        run: dart pub deps | grep -E "intl|media_kit_video|screen_brightness" || true
 
       - name: Build Release
         run: flutter build windows --release
