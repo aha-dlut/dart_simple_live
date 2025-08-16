@@ -26,11 +26,13 @@ jobs:
       - name: "Clean lockfile"
         run: rm -f pubspec.lock
 
-      - name: "Write pubspec_overrides.yaml (fix intl only)"
+      # ✅ 先解决依赖冲突：降级 screen_brightness + 固定 intl
+      - name: "Write pubspec_overrides.yaml (intl + screen_brightness)"
         run: |
           cat > pubspec_overrides.yaml <<'EOF'
           dependency_overrides:
             intl: 0.20.2
+            screen_brightness: ^0.2.2+1
           EOF
           echo "=== pubspec_overrides.yaml ==="
           cat pubspec_overrides.yaml
@@ -38,38 +40,19 @@ jobs:
       - name: "Pub get"
         run: flutter pub get
 
-      # === 关键：在 Windows 侧移除问题插件的原生注册与构建 ===
+      # ✅ 接着屏蔽 Windows 的问题原生插件，避免 CMake/本地代码编译
       - name: "Patch generated Windows plugin files (drop problematic plugins)"
         run: |
           set -e
           GEN_DIR="windows/flutter"
-
-          echo "Before patch ===== generated_plugins.cmake ====="
-          sed -n '1,200p' "${GEN_DIR}/generated_plugins.cmake" || true
-
-          # 1) 从 CMake 里移除 add_subdirectory / plugin 列表（避免编译原生插件）
-          #    这里粗删包含关键字的整行
-          sed -i '/media_kit_libs_windows_video/d' "${GEN_DIR}/generated_plugins.cmake"
-          sed -i '/screen_brightness_windows/d' "${GEN_DIR}/generated_plugins.cmake"
-
-          echo "After patch ===== generated_plugins.cmake ====="
-          sed -n '1,200p' "${GEN_DIR}/generated_plugins.cmake" || true
-
-          # 2) 从 C++ registrant 里移除 include 和 Register 调用（避免找不到头文件/符号）
+          # 1) 从 CMake 里删除这些插件
+          sed -i '/media_kit_libs_windows_video/d' "${GEN_DIR}/generated_plugins.cmake" || true
+          sed -i '/screen_brightness_windows/d'     "${GEN_DIR}/generated_plugins.cmake" || true
+          # 2) 从 C++ registrant 里去掉 include/注册调用
           REG_CC="${GEN_DIR}/generated_plugin_registrant.cc"
           if [ -f "${REG_CC}" ]; then
-            cp "${REG_CC}" "${REG_CC}.bak"
-
-            # 删除相关 include
-            sed -i '/media_kit_libs_windows_video/d' "${REG_CC}"
-            sed -i '/screen_brightness_windows/d' "${REG_CC}"
-
-            # 有些版本使用 *_plugin_c_api.h / *_plugin.h，以上两行已覆盖常见情况
-
-            echo "After patch ===== generated_plugin_registrant.cc (diff) ====="
-            diff -u "${REG_CC}.bak" "${REG_CC}" || true
-          else
-            echo "No generated_plugin_registrant.cc found (will be generated during build)."
+            sed -i '/media_kit_libs_windows_video/d' "${REG_CC}" || true
+            sed -i '/screen_brightness_windows/d'     "${REG_CC}" || true
           fi
 
       - name: "Show resolved key deps"
