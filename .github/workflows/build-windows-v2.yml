@@ -26,13 +26,13 @@ jobs:
       - name: "Clean lockfile"
         run: rm -f pubspec.lock
 
-      # ✅ 先解决依赖冲突：降级 screen_brightness + 固定 intl
-      - name: "Write pubspec_overrides.yaml (intl + screen_brightness)"
+      # 关键：保持 screen_brightness 2.x，升级 media_kit_video 到 1.3.0，并修 intl
+      - name: "Write pubspec_overrides.yaml (intl + media_kit_video=1.3.0)"
         run: |
           cat > pubspec_overrides.yaml <<'EOF'
           dependency_overrides:
             intl: 0.20.2
-            screen_brightness: ^0.2.2+1
+            media_kit_video: 1.3.0
           EOF
           echo "=== pubspec_overrides.yaml ==="
           cat pubspec_overrides.yaml
@@ -40,15 +40,15 @@ jobs:
       - name: "Pub get"
         run: flutter pub get
 
-      # ✅ 接着屏蔽 Windows 的问题原生插件，避免 CMake/本地代码编译
+      # 屏蔽 Windows 的问题原生插件（不编译它们的 C++ 代码）
       - name: "Patch generated Windows plugin files (drop problematic plugins)"
         run: |
           set -e
           GEN_DIR="windows/flutter"
-          # 1) 从 CMake 里删除这些插件
+          # 删除 CMake 引用
           sed -i '/media_kit_libs_windows_video/d' "${GEN_DIR}/generated_plugins.cmake" || true
           sed -i '/screen_brightness_windows/d'     "${GEN_DIR}/generated_plugins.cmake" || true
-          # 2) 从 C++ registrant 里去掉 include/注册调用
+          # 删除 C++ 注册
           REG_CC="${GEN_DIR}/generated_plugin_registrant.cc"
           if [ -f "${REG_CC}" ]; then
             sed -i '/media_kit_libs_windows_video/d' "${REG_CC}" || true
@@ -56,7 +56,7 @@ jobs:
           fi
 
       - name: "Show resolved key deps"
-        run: dart pub deps | grep -E "intl|media_kit|screen_brightness" || true
+        run: dart pub deps | grep -E "intl|media_kit_video|screen_brightness" || true
 
       - name: "Build Release"
         run: flutter build windows --release
