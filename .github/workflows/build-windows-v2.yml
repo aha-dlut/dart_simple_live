@@ -1,4 +1,4 @@
-name: build-windows-v2
+name: build-windows-v3
 on:
   workflow_dispatch:
 
@@ -26,13 +26,14 @@ jobs:
       - name: "Clean lockfile"
         run: rm -f pubspec.lock
 
-      # 关键：只在 CI 覆盖依赖版本（不改源码）
-      - name: "Write pubspec_overrides.yaml (intl + media_kit_video + volume_controller)"
+      # 覆盖依赖：与 Flutter 3.22 匹配并让 media_kit_video 与 2.x 的 screen_brightness 共存
+      - name: "Write pubspec_overrides.yaml (pin compat versions)"
         run: |
           cat > pubspec_overrides.yaml <<'EOF'
           dependency_overrides:
             intl: 0.20.2
             media_kit_video: ^1.3.0
+            media_kit: ^1.2.0
             volume_controller: ^3.0.2
           EOF
           echo "=== pubspec_overrides.yaml ==="
@@ -41,15 +42,15 @@ jobs:
       - name: "Pub get"
         run: flutter pub get
 
-      # 屏蔽 Windows 的问题原生插件（避免 CMake/本地代码编译）
+      # 屏蔽 Windows 侧的原生插件，避免 CMake/本地代码编译
       - name: "Patch generated Windows plugin files (drop problematic plugins)"
         run: |
           set -e
           GEN_DIR="windows/flutter"
-          # 删除 CMake 引用
+          # 1) 从 CMake 列表移除
           sed -i '/media_kit_libs_windows_video/d' "${GEN_DIR}/generated_plugins.cmake" || true
           sed -i '/screen_brightness_windows/d'     "${GEN_DIR}/generated_plugins.cmake" || true
-          # 删除 C++ 注册
+          # 2) 从 C++ registrant 中移除 include/注册
           REG_CC="${GEN_DIR}/generated_plugin_registrant.cc"
           if [ -f "${REG_CC}" ]; then
             sed -i '/media_kit_libs_windows_video/d' "${REG_CC}" || true
@@ -57,7 +58,7 @@ jobs:
           fi
 
       - name: "Show resolved key deps"
-        run: dart pub deps | grep -E "intl|media_kit_video|screen_brightness|volume_controller" || true
+        run: dart pub deps | grep -E "intl|media_kit|media_kit_video|screen_brightness|volume_controller" || true
 
       - name: "Build Release"
         run: flutter build windows --release
