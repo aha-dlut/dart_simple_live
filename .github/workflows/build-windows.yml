@@ -1,26 +1,33 @@
 name: build-windows
-on: [workflow_dispatch]  # 手动触发，点 Actions -> Run workflow
+on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: windows-latest
     defaults:
       run:
-        working-directory: simple_live_app   # 关键：进入子项目
+        working-directory: simple_live_app
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          # 如果仓库用 FVM 固定版本，可写死：
-          # flutter-version: '3.22.2'
+          flutter-version: '3.22.2'   # 用你现在的稳定版即可
 
       - name: Enable Windows desktop
         run: flutter config --enable-windows-desktop
 
-      - name: Pub get (resolve path deps)
+      # ✅ 在 CI 里临时写 pubspec_overrides.yaml（不改仓库）
+      - name: Add dependency overrides for intl 0.20.2
+        shell: pwsh
+        run: |
+          @"
+          dependency_overrides:
+            intl: 0.20.2
+          "@ | Out-File -FilePath pubspec_overrides.yaml -Encoding utf8
+
+      - name: Pub get
         run: flutter pub get
 
       - name: Build Release
@@ -30,4 +37,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: simple_live_app-windows
-          path: build/windows/x64/runner/Release/   # 整个目录都会被打包
+          path: build/windows/x64/runner/Release/
