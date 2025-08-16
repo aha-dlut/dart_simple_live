@@ -20,16 +20,47 @@ jobs:
       - name: Enable Windows desktop
         run: flutter config --enable-windows-desktop
 
-      - name: Add pubspec_overrides.yaml (intl 0.20.2)
+      - name: Clean lockfile
         shell: pwsh
         run: |
-          @"
+          if (Test-Path pubspec.lock) { Remove-Item pubspec.lock -Force }
+
+      # 尝试1：覆盖 intl & 升级 media_kit_video（优先保持较新依赖）
+      # 失败则尝试2：覆盖 intl & 降级 screen_brightness 以匹配 media_kit_video 1.2.x
+      - name: Resolve deps with overrides (try upgrade, then fallback)
+        shell: pwsh
+        run: |
+          function Try-PubGet($yaml) {
+            $yaml | Out-File -FilePath pubspec_overrides.yaml -Encoding utf8
+            Write-Host "=== pubspec_overrides.yaml ==="
+            Get-Content pubspec_overrides.yaml
+            flutter pub get
+            return $LASTEXITCODE
+          }
+
+          # 尝试1：intl + media_kit_video 升级
+          $try1 = @"
           dependency_overrides:
             intl: 0.20.2
-          "@ | Out-File -FilePath pubspec_overrides.yaml -Encoding utf8
+            media_kit_video: ^1.4.0
+          "@
+          $code = Try-PubGet $try1
 
-      - name: Pub get
-        run: flutter pub get
+          if ($code -ne 0) {
+            Write-Host "Try1 failed, fallback to screen_brightness downgrade..."
+            # 尝试2：intl + 降级 screen_brightness（去掉 media_kit_video 的覆盖）
+            $try2 = @"
+            dependency_overrides:
+              intl: 0.20.2
+              screen_brightness: ^0.2.2+1
+            "@
+            $code = Try-PubGet $try2
+            if ($code -ne 0) { exit $code }
+          }
+
+      - name: Show resolved versions (intl/media_kit_video/screen_brightness)
+        shell: pwsh
+        run: dart pub deps | Select-String -Pattern "intl|media_kit_video|screen_brightness"
 
       - name: Build Release
         run: flutter build windows --release
