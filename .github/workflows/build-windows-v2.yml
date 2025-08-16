@@ -20,13 +20,24 @@ jobs:
           channel: stable
           flutter-version: '3.22.2'
 
+      - name: "Show Flutter/Dart versions"
+        run: |
+          flutter --version
+          dart --version
+
+      - name: "Guard: ensure Flutter 3.22.x"
+        run: |
+          v=$(flutter --version | head -n1)
+          echo "$v"
+          echo "$v" | grep -E "Flutter 3\.22\." >/dev/null || (echo "Runner is not Flutter 3.22.x" && exit 1)
+
       - name: "Enable Windows desktop"
         run: flutter config --enable-windows-desktop
 
       - name: "Clean lockfile"
         run: rm -f pubspec.lock
 
-      # 覆盖依赖：与 Flutter 3.22 匹配并让 media_kit_video 与 2.x 的 screen_brightness 共存
+      # 覆盖依赖：与 3.22 匹配并消除 media_kit 视频栈的连锁冲突
       - name: "Write pubspec_overrides.yaml (pin compat versions)"
         run: |
           cat > pubspec_overrides.yaml <<'EOF'
@@ -42,7 +53,20 @@ jobs:
       - name: "Pub get"
         run: flutter pub get
 
-      # 屏蔽 Windows 侧的原生插件，避免 CMake/本地代码编译
+      - name: "Show resolved key deps"
+        run: dart pub deps | grep -E "intl|media_kit|media_kit_video|volume_controller|screen_brightness|flutter_localizations" || true
+
+      # ====== 最小代码补丁（仅在 CI 工作区，绝不提交仓库）======
+      - name: "Patch source for volume_controller v3 API (non-invasive)"
+        run: |
+          set -e
+          # 1) 2.x -> 3.x: 构造器改为单例 instance
+          git ls-files '*.dart' | xargs -I{} sed -i 's/VolumeController()/VolumeController.instance/g' {}
+          # 2) 2.x -> 3.x: 监听 API 改名 listener -> addListener
+          git ls-files '*.dart' | xargs -I{} sed -i 's/\.listener(/.addListener(/g' {}
+          echo "Patched volume_controller API calls to v3-compatible forms."
+
+      # ====== 屏蔽 Windows 原生插件的编译（不影响 Dart 层调用路径）======
       - name: "Patch generated Windows plugin files (drop problematic plugins)"
         run: |
           set -e
@@ -50,15 +74,12 @@ jobs:
           # 1) 从 CMake 列表移除
           sed -i '/media_kit_libs_windows_video/d' "${GEN_DIR}/generated_plugins.cmake" || true
           sed -i '/screen_brightness_windows/d'     "${GEN_DIR}/generated_plugins.cmake" || true
-          # 2) 从 C++ registrant 中移除 include/注册
+          # 2) 从 C++ registrant 中移除 include/注册（文件可能在 build 中生成，缺失就忽略）
           REG_CC="${GEN_DIR}/generated_plugin_registrant.cc"
           if [ -f "${REG_CC}" ]; then
             sed -i '/media_kit_libs_windows_video/d' "${REG_CC}" || true
             sed -i '/screen_brightness_windows/d'     "${REG_CC}" || true
           fi
-
-      - name: "Show resolved key deps"
-        run: dart pub deps | grep -E "intl|media_kit|media_kit_video|screen_brightness|volume_controller" || true
 
       - name: "Build Release"
         run: flutter build windows --release
