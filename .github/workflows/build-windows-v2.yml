@@ -1,5 +1,6 @@
 name: build-windows-v2
-on: [workflow_dispatch]
+on:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -7,6 +8,7 @@ jobs:
     defaults:
       run:
         working-directory: simple_live_app
+        shell: bash
 
     steps:
       - uses: actions/checkout@v4
@@ -21,12 +23,10 @@ jobs:
         run: flutter config --enable-windows-desktop
 
       - name: Clean lockfile
-        run: |
-          if (Test-Path pubspec.lock) { Remove-Item pubspec.lock -Force }
+        run: rm -f pubspec.lock
 
-      # 尝试1：intl 0.20.2 + 升级 media_kit_video（优先较新依赖）
+      # 尝试 1：覆盖 intl + 升级 media_kit_video
       - name: Write overrides (try1: intl + media_kit_video)
-        shell: bash
         run: |
           cat > pubspec_overrides.yaml <<'EOF'
           dependency_overrides:
@@ -38,13 +38,11 @@ jobs:
 
       - name: Pub get (try1)
         id: pubget1
-        run: flutter pub get
-        continue-on-error: true
+        run: flutter pub get || true
 
-      # 若 try1 失败，则回退：intl 0.20.2 + 降级 screen_brightness
-      - name: Write overrides (fallback: intl + screen_brightness)
-        if: steps.pubget1.outcome == 'failure'
-        shell: bash
+      # 如果 try1 失败，则回退：intl + 降级 screen_brightness
+      - name: Fallback overrides (intl + screen_brightness)
+        if: ${{ failure() && steps.pubget1.conclusion == 'failure' }}
         run: |
           cat > pubspec_overrides.yaml <<'EOF'
           dependency_overrides:
@@ -53,13 +51,9 @@ jobs:
           EOF
           echo "=== pubspec_overrides.yaml (fallback) ==="
           cat pubspec_overrides.yaml
-
-      - name: Pub get (fallback)
-        if: steps.pubget1.outcome == 'failure'
-        run: flutter pub get
+          flutter pub get
 
       - name: Show resolved versions
-        shell: bash
         run: dart pub deps | grep -E "intl|media_kit_video|screen_brightness" || true
 
       - name: Build Release
