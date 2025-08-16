@@ -27,7 +27,7 @@ jobs:
 
       - name: "Guard: ensure Flutter 3.22.x"
         run: |
-          v=$(flutter --version | head -n1)
+          v=$(flutter --version | head -n1 || true)
           echo "$v"
           echo "$v" | grep -E "Flutter 3\.22\." >/dev/null || (echo "Runner is not Flutter 3.22.x" && exit 1)
 
@@ -37,7 +37,7 @@ jobs:
       - name: "Clean lockfile"
         run: rm -f pubspec.lock
 
-      # 覆盖依赖：与 3.22 匹配并消除 media_kit 视频栈的连锁冲突
+      # 覆盖依赖，解开冲突链
       - name: "Write pubspec_overrides.yaml (pin compat versions)"
         run: |
           cat > pubspec_overrides.yaml <<'EOF'
@@ -56,15 +56,40 @@ jobs:
       - name: "Show resolved key deps"
         run: dart pub deps | grep -E "intl|media_kit|media_kit_video|volume_controller|screen_brightness|flutter_localizations" || true
 
-      # ====== 最小代码补丁（仅在 CI 工作区，绝不提交仓库）======
-      - name: "Patch source for volume_controller v3 API (non-invasive)"
+      # ====== 最小代码补丁（仅在 CI 工作区，不提交仓库）======
+      - name: "Patch source for volume_controller v3 API (constructor & listener)"
         run: |
           set -e
-          # 1) 2.x -> 3.x: 构造器改为单例 instance
-          git ls-files '*.dart' | xargs -I{} sed -i 's/VolumeController()/VolumeController.instance/g' {}
-          # 2) 2.x -> 3.x: 监听 API 改名 listener -> addListener
-          git ls-files '*.dart' | xargs -I{} sed -i 's/\.listener(/.addListener(/g' {}
-          echo "Patched volume_controller API calls to v3-compatible forms."
+          # 1) VolumeController() / new / const / 带空格 -> VolumeController.instance
+          files=$(git ls-files '*.dart')
+          for f in $files; do
+            perl -0777 -pe 's/\bnew\s+VolumeController\s*\(\s*\)/VolumeController.instance/g' -i "$f"
+            perl -0777 -pe 's/\bconst\s+VolumeController\s*\(\s*\)/VolumeController.instance/g' -i "$f"
+            perl -0777 -pe 's/\bVolumeController\s*\(\s*\)/VolumeController.instance/g' -i "$f"
+            # 2) .listener( -> .addListener(
+            perl -0777 -pe 's/\.listener\s*\(/.addListener(/g' -i "$f"
+          done
+          echo "Patched VolumeController API usages."
+
+      # ====== 修补 media_kit_video 的 PopScope 参数名（兼容 runner 不认识 onPopInvokedWithResult 的情况）======
+      - name: "Patch media_kit_video PopScope param to onPopInvoked (pub cache)"
+        run: |
+          set -e
+          CACHE_DIR="${LOCALAPPDATA//\\//}/Pub/Cache/hosted/pub.dev"
+          # 可能的文件位置（取第一个命中）
+          target=$(ls "$CACHE_DIR"/media_kit_video-*/lib/media_kit_video_controls/src/controls/widgets/fullscreen_inherited_widget.{dart,gdart} 2>/dev/null | head -n1 || true)
+          if [ -z "$target" ]; then
+            target=$(grep -RIl --include="*.dart" "onPopInvokedWithResult" "$CACHE_DIR"/media_kit_video-* 2>/dev/null | head -n1 || true)
+          fi
+          if [ -n "$target" ]; then
+            echo "Patching $target"
+            # 参数名改为 onPopInvoked:
+            sed -i 's/onPopInvokedWithResult:/onPopInvoked:/g' "$target"
+            # 两参 (didPop, result) -> 一参 (didPop)
+            sed -i 's/(didPop[[:space:]]*,[[:space:]]*result)/(didPop)/g' "$target"
+          else
+            echo "No onPopInvokedWithResult usage found; skip."
+          fi
 
       # ====== 屏蔽 Windows 原生插件的编译（不影响 Dart 层调用路径）======
       - name: "Patch generated Windows plugin files (drop problematic plugins)"
@@ -74,7 +99,7 @@ jobs:
           # 1) 从 CMake 列表移除
           sed -i '/media_kit_libs_windows_video/d' "${GEN_DIR}/generated_plugins.cmake" || true
           sed -i '/screen_brightness_windows/d'     "${GEN_DIR}/generated_plugins.cmake" || true
-          # 2) 从 C++ registrant 中移除 include/注册（文件可能在 build 中生成，缺失就忽略）
+          # 2) 从 C++ registrant 中移除 include/注册
           REG_CC="${GEN_DIR}/generated_plugin_registrant.cc"
           if [ -f "${REG_CC}" ]; then
             sed -i '/media_kit_libs_windows_video/d' "${REG_CC}" || true
