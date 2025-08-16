@@ -1,0 +1,41 @@
+name: build-windows-v2
+on: [workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: simple_live_app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter 3.22.x
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.22.2'
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Add pubspec_overrides.yaml (intl 0.20.2)
+        shell: pwsh
+        run: |
+          @"
+          dependency_overrides:
+            intl: 0.20.2
+          "@ | Out-File -FilePath pubspec_overrides.yaml -Encoding utf8
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Build Release
+        run: flutter build windows --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: simple_live_app-windows
+          path: build/windows/x64/runner/Release/
