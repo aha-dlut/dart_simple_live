@@ -195,30 +195,21 @@ jobs:
             simple_live_app/build/dist/*/*.deb
             simple_live_app/build/dist/*/*.zip
 
-      # 读取版本信息
-      - name: Read version
-        id: version
-        uses: juliangruber/read-file-action@v1
-        with:
-          path: assets/app_version.json
-      - name: Echo version
-        run: echo "${{ fromJson(steps.version.outputs.content).version }}"
-      - name: Echo version content
-        run: echo "${{ fromJson(steps.version.outputs.content).version_desc }}"
-
-      #上传至Release
       - name: Upload Release
         uses: softprops/action-gh-release@v1
         with:
-          name: "${{ fromJson(steps.version.outputs.content).version }}"
-          body: "${{ fromJson(steps.version.outputs.content).version_desc }}"
-          prerelease: ${{ fromJson(steps.version.outputs.content).prerelease }}
-          token: ${{ secrets.TOKEN }}
+          tag_name: "v${{ env.FIXED_VERSION }}"
+          name: "v${{ env.FIXED_VERSION }}"
+          body: "Dev build ${{ env.FIXED_VERSION }}"
+          prerelease: true
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: |
             simple_live_app/build/dist/*/*.deb
             simple_live_app/build/dist/*/*.zip
-        #完成
+
       - run: echo "🍏 Linux job's status is ${{ job.status }}."
+
+
 
   # 打包Windows
   build-windows:
