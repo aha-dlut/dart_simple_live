@@ -1,0 +1,159 @@
+name: app-build-action
+
+env:
+  FIXED_VERSION: "1.0.0"
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-mac-ios-android:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      # 1) 签出到当前触发的提交（tag 或分支），避免强制 master
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      # 2) 计算发布用的 tag：推 tag 用推送的，手动触发用 FIXED_VERSION
+      - name: Compute release tag
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=v${FIXED_VERSION}" >> $GITHUB_OUTPUT
+          fi
+
+      # 3) APK 签名：把 base64 keystore 写到临时文件，并生成 key.properties
+      - name: Download Android keystore
+        id: android_keystore
+        uses: timheuer/base64-to-file@v1.2
+        with:
+          fileName: keystore.jks
+          encodedString: ${{ secrets.KEYSTORE_BASE64 }}
+
+      - name: Create key.properties
+        run: |
+          echo "storeFile=${{ steps.android_keystore.outputs.filePath }}" > simple_live_app/android/key.properties
+          echo "storePassword=${{ secrets.STORE_PASSWORD }}" >> simple_live_app/android/key.properties
+          echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> simple_live_app/android/key.properties
+          echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> simple_live_app/android/key.properties
+
+      # 4) Java 17（AGP/Kotlin 兼容），并缓存 Gradle
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: 'gradle'
+
+      # 5) Flutter 稳定版
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.x'
+          cache: true
+
+      # 6) 启用 macOS 桌面（给后续打包用）
+      - name: Enable Flutter Desktop
+        run: flutter config --enable-macos-desktop
+
+      # 7) **修复 Kotlin 版本不兼容**（兼容新旧工程结构），并清理 Gradle 缓存
+      - name: Patch Kotlin Gradle plugin to 1.8.22 and clean caches
+        shell: bash
+        run: |
+          set -e
+          ROOT="simple_live_app/android"
+          # settings.gradle 新结构（Flutter 3.19+）
+          if grep -q 'org.jetbrains.kotlin.android' "$ROOT/settings.gradle" 2>/dev/null; then
+            sed -E -i '' 's/(id[[:space:]]+"org.jetbrains.kotlin.android"[[:space:]]+version[[:space:]]+")([^"]+)(")/\11.8.22\3/' "$ROOT/settings.gradle" || true
+          fi
+          # build.gradle 老结构（ext.kotlin_version）
+          if grep -q 'ext.kotlin_version' "$ROOT/build.gradle" 2>/dev/null; then
+            sed -E -i '' "s/(ext\.kotlin_version\s*=\s*')[^']+(')/\1 1.8.22 \2/" "$ROOT/build.gradle" || true
+          fi
+          # 清理 Gradle 缓存，避免旧 1.6 元数据造成冲突
+          rm -rf ~/.gradle/caches
+
+      # 8) 拉包
+      - name: Restore packages
+        run: |
+          cd simple_live_app
+          flutter pub get
+
+      # 9) （可选）安装 appdmg & flutter_distributor 用于 macOS 打包
+      - name: Install packaging tools
+        run: |
+          npm install -g appdmg
+          dart pub global activate flutter_distributor
+
+      # 10) 构建 Android（按 ABI 拆包）
+      - name: Build APK
+        run: |
+          cd simple_live_app
+          flutter build apk --release --split-per-abi
+
+      - name: Upload APK Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: |
+            simple_live_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            simple_live_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            simple_live_app/build/app/outputs/flutter-apk/app-x86_64-release.apk
+
+      # 11) 构建 iOS（未签名 ipa）
+      - name: Build iOS (no codesign)
+        run: |
+          cd simple_live_app
+          flutter build ios --release --no-codesign
+          mkdir -p build/ios/iphoneos/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/Runner.app
+          cd build/ios/iphoneos
+          zip -q -r ios_no_sign.ipa Payload
+          cd ../../..
+
+      - name: Upload iOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: simple_live_app/build/ios/iphoneos/ios_no_sign.ipa
+
+      # 12) 构建 macOS（dmg/zip）
+      - name: Build macOS
+        run: |
+          cd simple_live_app
+          flutter_distributor package --platform macos --targets dmg,zip --skip-clean
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: |
+            simple_live_app/build/dist/*/*.dmg
+            simple_live_app/build/dist/*/*.zip
+
+      # 13) 发布到 Release（推 tag 用真实 tag；手动触发用 FIXED_VERSION）
+      - name: Upload Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          body: "Dev build ${{ steps.meta.outputs.tag }}"
+          prerelease: true
+          files: |
+            simple_live_app/build/app/outputs/flutter-apk/app-x86_64-release.apk
+            simple_live_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            simple_live_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            simple_live_app/build/ios/iphoneos/ios_no_sign.ipa
+            simple_live_app/build/dist/*/*.dmg
+            simple_live_app/build/dist/*/*.zip
+
+      - run: echo "🍏 Job status is ${{ job.status }}."
