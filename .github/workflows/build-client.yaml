@@ -94,38 +94,6 @@ jobs:
           npm install -g appdmg
           dart pub global activate flutter_distributor
 
-      # 10) 构建 Android（按 ABI 拆包）
-      - name: Build APK
-        run: |
-          cd simple_live_app
-          flutter build apk --release --split-per-abi
-
-      - name: Upload APK Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: android
-          path: |
-            simple_live_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
-            simple_live_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-            simple_live_app/build/app/outputs/flutter-apk/app-x86_64-release.apk
-
-      # 11) 构建 iOS（未签名 ipa）
-      - name: Build iOS (no codesign)
-        run: |
-          cd simple_live_app
-          flutter build ios --release --no-codesign
-          mkdir -p build/ios/iphoneos/Payload
-          cp -R build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/Runner.app
-          cd build/ios/iphoneos
-          zip -q -r ios_no_sign.ipa Payload
-          cd ../../..
-
-      - name: Upload iOS Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios
-          path: simple_live_app/build/ios/iphoneos/ios_no_sign.ipa
-
       # 12) 构建 macOS（dmg/zip）
       - name: Build macOS
         run: |
