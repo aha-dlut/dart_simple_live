@@ -10,11 +10,21 @@ pluginManagement {
 
     includeBuild("${settings.ext.flutterSdkPath}/packages/flutter_tools/gradle")
 
+    // ✅ 加上 kotlin 插件的版本映射（推荐 1.9.22 或 1.9.24）
     plugins {
         id "dev.flutter.flutter-gradle-plugin" version "1.0.0" apply false
+        id "org.jetbrains.kotlin.android" version "1.9.22" apply false
     }
+
+    //（可选）如果你更喜欢用解析策略，也可以这样写任一方式其一即可
+    // resolutionStrategy {
+    //     eachPlugin {
+    //         if (requested.id.id == "org.jetbrains.kotlin.android") {
+    //             useVersion("1.9.22")
+    //         }
+    //     }
+    // }
 }
 
 include ":app"
-
 apply from: "${settings.ext.flutterSdkPath}/packages/flutter_tools/gradle/app_plugin_loader.gradle"
